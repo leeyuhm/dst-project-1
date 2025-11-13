@@ -1,0 +1,19 @@
+---
+output:
+  pdf_document:
+    pandoc_args: ["--metadata=citation-package:none"]
+header-includes:
+  - \usepackage[numbers]{natbib}
+  - \usepackage{float}
+---
+
+# Introduction
+
+In this analysis, we develop and evaluate a few statistical models to predict mortality in a cohort of 299 patients with cardiac conditions, using a range of demographic and physiological measurements. The data set presents two major challenges: a moderately imbalanced outcome (with death being the minority class) and several continuous predictors whose relationships with (the log-odds of) mortality may not be linear. These characteristics motivate the use of model extensions such as class weighting, regularisation and the inclusion of non-linear terms to provide improvements in several areas.
+
+Beyond model construction, we employ performance metrics, such as ROC–AUC, to quantify overall model ranking ability. We also utilise the Matthews Correlation Coefficient (MCC), a balanced metric that incorporates all four outcomes of the confusion matrix, which is deemed informative under class imbalance. Diagnostic tools (such as residual plots and goodness-of-fit tests) are used to assess the adequacy of model assumptions, guiding the development of more flexible models such as natural cubic splines.
+
+The aim of this report is to construct, assess and refine predictive models for patient mortality while using rigorous statistical diagnostics and metrics appropriate to the clinical structure of the data. Through this process, we highlight the importance of addressing imbalance in the outcome and selecting evaluation criteria that meaningfully reflect performance in high-stakes medical prediction tasks.
+
+\bibliographystyle{unsrtnat}
+\bibliography{references}

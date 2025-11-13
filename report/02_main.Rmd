@@ -1,0 +1,1150 @@
+---
+output:
+  pdf_document:
+    pandoc_args: ["--metadata=citation-package:none"]
+header-includes:
+  - \usepackage[numbers]{natbib}
+  - \usepackage{float}
+---
+
+# Part A: Preprocessing the data
+
+We begin by loading the data into \texttt{R} and taking a peek at the first few observations of the data set.
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+# Setting correct directory
+setwd("D:/University/Data Science Toolbox/Group Project 1")
+```
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+# Loading necessary libraries
+library(arm)
+library(car)
+library(caret)
+library(ggeffects)
+library(ggplot2)
+library(glmnet)
+library(gridExtra)
+library(MASS)
+library(patchwork)
+library(ResourceSelection)
+library(splines)
+auc <- pROC::auc
+F1_Score <- MLmetrics::F1_Score
+roc <- pROC::roc
+```
+
+```{r}
+# Loading the data
+df_raw <- read.csv("S1Data.csv")
+```
+
+```{r}
+# Taking a quick glimpse at the data
+head(df_raw)
+```
+
+A rudimentary description of each variable is given below:
+
+* \texttt{TIME}: Follow-up period (in days)
+* \texttt{Event}: Whether death occurred during follow-up (1 = 'died', 0 = 'survived')
+* \texttt{Gender}: Sex of the patient (1 = 'male', 0 = 'female')
+* \texttt{Smoking}: Whether the patient smokes (1 = 'smoker', 0 = 'non-smoker')
+* \texttt{Diabetes}: Whether the patient has diabetes (1 = 'diabetic', 0 = 'non-diabetic')
+* \texttt{BP}: Whether the patient has hypertension (1 = 'hypertensive', 0 = 'non-hypertensive')
+* \texttt{Anaemia}: Whether the patient has anaemia (1 = 'anaemic', 0 = 'non-anaemic')
+* \texttt{Age}: Age of the patient (in years)
+* \texttt{Ejection.Fraction}: The amount of blood exiting the heart per contraction (as a percentage)
+* \texttt{Sodium}: The level of sodium in the blood (in mEq/L)
+* \texttt{Creatinine}: The level of creatinine in the blood (in mg/dL)
+* \texttt{Pletelets}: Blood platelet count (in platelet/$\mu$L)
+* \texttt{CPK}: The level of creatine phosphokinase (CPK) enzyme in the blood (in $\mu$g/L)
+
+The European Society of Cardiology guidelines, published in 2021, provide three subgroups of heart failure based on ejection fraction \cite{esc}:
+
+- Heart failure with preserved ejection fraction (HFpEF): $\geq$ 50%
+- Heart failure with moderately reduced ejection fraction (HFmrEF): 41-49%
+- Heart failure with reduced ejection fraction (HFrEF): $\leq$ 40%
+
+We therefore create a new variable, namely \texttt{ef\_grp}, corresponding to these clinically defined levels. All other variables are renamed for enhanced clarity and a copy of the raw data set is created for clean-up.
+
+```{r}
+# Aggregating variables
+vars <- c("time", "event", "sex", "smoker", "diabetic", "high_bp", "anaemic",
+          "age", "ef", "serum_s", "serum_c", "platelet", "cpk")
+```
+
+```{r}
+# Creating new data frame for clean-up
+df_clean <- df_raw
+
+# Renaming column titles
+names(df_clean) <- vars
+```
+
+```{r}
+# Mutating the data frame to include ejection fraction categories
+df_clean$ef_grp <- cut(df_clean$ef, breaks = c(-Inf, 40, 49, Inf),
+                       labels = c("HFrEF", "HFmrEF", "HFpEF"))
+```
+
+In order to aid us in interpretation, a dictionary is created to briefly explain how each variable has been measured.
+
+```{r}
+# Creating a dictionary to explain each variable
+df_dict <- data.frame(
+  Variable = c(vars, "ef_group"),
+  Description = c(
+    paste("Follow-up period"),
+    paste("Whether death occurred during follow-up"),
+    paste("Sex of the patient"),
+    paste("Whether the patient currently smokes"),
+    paste("Whether the patient has diabetes"),
+    paste("Whether the patient has hypertension"),
+    paste("Whether the patient has anaemia"),
+    paste("Age of the patient"),
+    paste("Ejection fraction (the amount of blood exiting the heart per contraction)"),
+    paste("Serum sodium (the level of sodium in the blood)"),
+    paste("Serum creatinine (the level of creatinine in the blood)"),
+    paste("Blood platelet count"),
+    paste("The level of creatine phosphokinase (CPK) enzyme in the blood)"),
+    paste("Heart failure classification based on ejection fraction")
+  ),
+  Units = c(
+    paste("Days"),
+    paste("Binary (1 = died, 0 = survived)"),
+    paste("Binary (1 = male, 0 = female)"),
+    paste("Binary (1 = yes, 0 = no)"),
+    paste("Binary (1 = yes, 0 = no)"),
+    paste("Binary (1 = yes, 0 = no)"),
+    paste("Binary (1 = yes, 0 = no)"),
+    paste("Years"),
+    paste("Percentage"),
+    paste("Milliequivalents per litre (mEq/L)"),
+    paste("Milligrams per decilitre (mg/dL)"),
+    paste("Platelets per microlitre (platelet/mcL)"),
+    paste("Micrograms per litre (mcg/L)"),
+    paste("Ordinal (1 = HFpEF, 2 = HFmrEF, 3 = HFrEF)")
+  ),
+  stringsAsFactors = FALSE
+)
+```
+
+```{r, warning = FALSE}
+# Viewing the dictionary in R (drag the header cell borders to change the column width)
+View(df_dict)
+```
+
+Let us now see if the data needs to be cleaned; we start by checking for any missing values.
+
+```{r}
+# Checking for missing values
+colSums(is.na(df_clean))
+```
+
+The output above tells us, succinctly, that there are no missing entries to delete or impute. Furthermore, we inspect the internal structure of our data frame; in particular, the *storage mode* (type of data) of each variable is of interest.
+
+```{r}
+# Checking the structure of our data frame
+str(df_clean)
+```
+
+We would expect the variable \texttt{age} to be of storage mode \texttt{int} (age, in years, takes integer values). Let us see what the fuss is about.
+
+```{r}
+# Checking observations with non-integer ages
+subset(df_clean, age %% 1 != 0)
+```
+
+Oddly enough, there are two observations with non-integer ages. We expect this to bear such negligible influence on our results. Nonetheless, for completeness, we round these ages down using the \texttt{floor()} function (those who are, mathematically speaking, 60.667-years-old would, most probably, state their age as 60-years-old in reality).
+
+```{r}
+# Rounding ages
+df_clean$age <- floor(df_clean$age)
+```
+
+Finally, we convert the categorical variables into factors.
+
+```{r}
+df_clean$event <- factor(df_clean$event, levels = c(0, 1),
+                         labels = c("Survived", "Died"))
+df_clean$sex <- factor(df_clean$sex, levels = c(0, 1),
+                       labels = c("Female", "Male"))
+df_clean$smoker <- factor(df_clean$smoker,levels = c(0, 1),
+                          labels = c("Non-smoker", "Smoker"))
+df_clean$diabetic <- factor(df_clean$diabetic, levels = c(0, 1),
+                            labels = c("Non-diabetic", "Diabetic"))
+df_clean$high_bp <- factor(df_clean$high_bp, levels = c(0, 1),
+                           labels = c("No hypertension", "Hypertension"))
+df_clean$anaemic <- factor(df_clean$anaemic, levels = c(0, 1),
+                           labels = c("Non-anaemic", "Anaemic"))
+```
+
+# Part B: Exploratory data analysis (EDA)
+
+Out of the 299 observations, 96 ($\approx$ 32%) patients died and 203 ($\approx$ 68%) patients survived. We deduce this easily using the $\texttt{table()}$ function.
+
+```{r}
+table(df_clean$event)
+```
+
+Given the variable \texttt{event} as our proposed regressor, this represents an imbalanced data set, with over twice as many survivors as non-survivors. We discuss the implications of this later.
+
+Let us continue by partitioning the variables into their continuous and categorical constituents. We exclude both \texttt{time} and \texttt{event} here due to the nature of our analyses.
+
+```{r}
+# Aggregating continuous and categorical variables separately
+cont_vars <- c("age", "ef", "serum_s", "serum_c", "platelet", "cpk")
+cat_vars <- c("sex", "smoker", "diabetic", "high_bp", "anaemic", "ef_grp")
+```
+
+```{r}
+# Summary statistics for the continuous variables
+summary(df_clean[cont_vars])
+
+# Histogram plotting function
+plot_histogram <- function(varname, data = df_clean, xlab_text = NULL) {
+  x <- data[[varname]]
+  
+  # If no custom x-axis label provided, use variable name
+  if (is.null(xlab_text)) {
+    xlab_text <- varname
+  }
+  
+  # Base histogram
+  hist(x,
+       breaks = 30,
+       col = "skyblue3",
+       border = "white",
+       main = paste("Distribution of", varname),
+       xlab = xlab_text,
+       ylab = "Frequency",
+       freq = FALSE)
+  
+  # Overlaying density curve
+  lines(density(x), col = "firebrick3", lwd = 2)
+  
+  # Adding data rug
+  rug(x, col = "gray50")
+}
+
+# Example: plot_histogram("age", xlab_text = "Age (years)")
+```
+
+See [Appendix B1](#appendix_B1) for the histogram/distribution plot of each continuous variable.
+
+A predominantly older cohort of patients was observed, with ages ranging from 40 to 95 (mean $\approx$ 61). Ejection fraction values spanned 14-80%, with a mean of approximately 38%, suggesting that most patients had reduced systolic function.
+
+Serum sodium levels averaged around 136 mEq/dL (a normal range is considered to be between 133-146 mEq/dL \cite{sod}), showing preserved electrolyte balance; serum creatinine levels, however, averaged around 1.39 mg/dL, ranging up to 9.4 mg/dL, highlighting a subset of patients with \textit{renal} (kidney) impairment \cite{origstudy}.
+
+Blood platelet counts varied widely (25100-850000 platelets/$\mu$L), clustering around 263000 platelets/$\mu$L (consistent with healthy levels \cite{plate}). In contrast, creatine phosphokinase (CPK) levels exhibited extreme right-skew, with a median of 250 $\mu$g/L, a mean of around 580 $\mu$g/L and a maximum value of around 7800 $\mu$g/L.
+
+We then create boxplots comparing the distribution of continuous variables between survivors and non-survivors.
+
+```{r}
+# Boxplot function for continuous variables grouped by death event
+plot_boxplot <- function(varname, data = df_clean, ylab_text = NULL) {
+  x <- data[[varname]]
+  outcome <- data$event
+  
+  if (is.null(ylab_text)) {
+    ylab_text <- varname
+  }
+  
+  boxplot(x ~ outcome,
+          col = c("skyblue3", "firebrick3"),
+          border = "gray30",
+          ylab = ylab_text,
+          xlab = "",
+          main = paste("Distribution of", varname, "by death event"))
+}
+
+# Example: plot_boxplot("age", ylab_text = "Age (years)")
+```
+
+The figure in [Appendix B2](#appendix_B2) tells us that non-survivors were generally older and had markedly lower ejection fractions; they also had slightly lower serum sodium levels and slightly higher serum creatinine levels.
+
+Stacked barplots are formed (as seen in [Appendix B3](#appendix_B3)) to illustrate the survival and death proportions across each categorical variable.
+
+```{r}
+# Barplot function for categorical variables
+plot_barplot <- function(varname, data = df_clean) {
+  # Contingency and percentage tables
+  tbl <- table(data[[varname]], data$event)
+  prop_tbl <- prop.table(tbl, 1) * 100
+
+  # Creating stacked barplots
+  mids <- barplot(t(prop_tbl),
+                  col = c("skyblue3", "firebrick3"),
+                  ylim = c(0, 100),
+                  ylab = "Percentage within group",
+                  xlab = "",
+                  main = paste("Death outcome by", varname))
+
+  # Adding percentage labels
+  text(mids,
+       prop_tbl[, "Survived"] / 2,
+       paste0(round(prop_tbl[, "Survived"], 1), "% survived"),
+       col = "white", cex = 0.8)
+  text(mids,
+       prop_tbl[, "Survived"] + prop_tbl[, "Died"] / 2,
+       paste0(round(prop_tbl[, "Died"], 1), "% died"),
+       col = "white", cex = 0.8)
+}
+
+# Example: plot_barplot("sex")
+```
+
+We note that mortality rates were slightly higher amongst anaemic and hypertensive patients, as well as those with a reduced ejection fraction (HFrEF). By contrast, sex, smoking and diabetes status showed little difference in survival proportions between groups.
+
+Now, we produce a correlation matrix (comparing only our numeric variables).
+
+```{r}
+cont_data <- df_clean[cont_vars]
+
+cor_matrix <- cor(cont_data, method = "pearson")
+cor_matrix
+```
+
+The output above reveals that the continuous predictors are only very weakly correlated with one another. A visual representation thus seems redundant as we no longer comment on the risk of multicollinearity.
+
+To summarise, mortality was primarily associated with older age, reduced ejection fraction and elevated renal injury markers. Categorical factors, such as anaemia and hypertension, also corresponded to higher death rates. Weak intercorrelations suggest that these predictors offer distinct information for modelling.
+
+# Part C: Modelling
+
+In this classification problem, we scrutinise the use of logistic regression as a method to predict whether a patient dies during the follow-up period based on a variety of predictors.
+
+```{r}
+# Defining appropriate predictors (excluding 'ef_grp' due to multicollinearity)
+preds <- setdiff(names(df_clean), c("event", "time", "ef_grp"))
+
+# Setting reference level for death event/outcome
+df_clean$event <- relevel(df_clean$event, ref = "Survived")
+
+# Omitting 'ef_grp' in our cleaned data
+df_clean$ef_grp <- NULL
+
+# Creating model matrix
+X <- model.matrix(event ~ ., data = df_clean[, c(preds, "event")])[ , -1]
+y <- df_clean$event
+```
+
+Here, we use the \texttt{caret} package to partition the data into training and test sets (80%/20% split). Stratified sampling is automatically employed to preserve class balance \cite{partition}.
+
+```{r}
+set.seed(123) # Setting seed for reproducible results
+
+# Splitting into stratified 80/20 train/test sets
+n <- nrow(df_clean)
+train_index <- createDataPartition(y, p = 0.8, list = FALSE)
+
+X_train <- X[train_index, ]
+X_test  <- X[-train_index, ]
+y_train <- y[train_index]
+y_test  <- y[-train_index]
+```
+
+Next, we normalise our continuous variables via standardisation. The process is as follows:
+
+1. Calculate the (distribution) mean and standard deviation for each predictor
+2. Subtract the mean from each value
+3. Divide the result by the corresponding standard deviation
+
+Mathematically,
+\begin{align*}
+  z_{ij} = \frac{x_{ij} - \mu_j}{\sigma_j},
+\end{align*}
+where
+
+* $x_{ij}$ is the original value of the $j$-th predictor for the $i$-th observation
+* $\mu_j$ is the mean of the $j$-th predictor
+* $\sigma_j$ is the standard deviation of the $j$-th predictor
+* $z_{ij}$ is the standardised (normalised) value of $x_{ij}$
+
+This decision is paramount when adopting regularisation methods, as penalties are sensitive to feature scaling \cite{scaling}. A more involved explanation is included in the individual reflection.
+
+```{r}
+# Computing mean and sd from training data
+train_means <- apply(X_train[, cont_vars], 2, mean)
+train_sds <- apply(X_train[, cont_vars], 2, sd)
+
+# Scaling training data
+X_train[, cont_vars] <- scale(X_train[, cont_vars],
+                               center = train_means,
+                               scale = train_sds)
+
+# Applying same scaling to test data
+X_test[, cont_vars] <- scale(X_test[, cont_vars],
+                              center = train_means,
+                              scale = train_sds)
+
+train_df <- data.frame(y_train, X_train)
+```
+
+We now fit the following logistic regression model:
+\begin{align*}
+  \text{logit}\left(\mathbb{P}(Y_i = 1 \ \big| \ \mathbf{x}_i)\right) = \beta_0 + \beta_1 x_{i1} + \dots + \beta_{11} x_{i 11},
+\end{align*}
+where
+
+* $Y_i \in \{0, 1\}$ is the (binary) death outcome for observation i
+* $\mathbf{x}_i = (x_{i1}, \dots, x_{i 11})$ is a vector of all (11) predictors
+* $\beta_0, \dots, \beta_{13}$ are the corresponding model coefficients estimated by maximum likelihood
+* the model assumes $Y_i \sim \text{Bernoulli}(p_i)$, with $p_i = \mathbb{P}(Y_i = 1 \ \big| \ \mathbf{x}_i)$
+
+The logit function is defined by the equation
+\begin{align*}
+  \text{logit}(p) = \text{ln}\left(\frac{p}{1-p}\right)
+\end{align*}
+and the inverse relationship gives predicted probabilities as
+\begin{align*}
+  \mathbb{P}(Y_i = 1 \ \big| \ \mathbf{x}_i) &= \text{logit}^{-1}\left(\beta_0 + \beta_1 x_{i1} + \dots + \beta_{13} x_{i 13}\right) \\
+  &= \frac{1}{1 + \exp(-\beta_0 + \beta_1 x_{i1} + \dots + \beta_{13} x_{i 13})}
+\end{align*}
+
+```{r}
+# Fitting basic logistic regression model
+full_model <- glm(y_train ~ ., data = train_df,
+                  family = binomial(link = "logit"))
+
+summary(full_model)
+```
+
+The variables $\texttt{age}$, $\texttt{ef}$ and $\texttt{serum\_c}$ are all significant here. Model convergence is achieved after five Fisher scoring iterations; the model's goodness-of-fit is indicated by the null and residual deviances (301.20 and 229.81, respectively) and an AIC of 253.81.
+
+A patient who smokes and/or has diabetes is at risk of hypertension \cite{smoking_bp,diabetes_bp}. Thus, we slightly bulk the previous model with two interaction terms built on prior information:
+\begin{multline*}
+  \text{logit}\left(\mathbb{P}(Y_i = 1 \ \big| \ \mathbf{x}_i)\right) = \beta_0 + \beta_1 x_{i1} + \dots \\ + \beta_{11} x_{i 11} + \beta_{12}\left(\texttt{smoker}_i \times \texttt{hypertentive}_i\right) + \beta_{13}\left(\texttt{diabetic}_i \times \texttt{hypertentive}_i\right),
+\end{multline*}
+where
+
+* $\texttt{smoker}_i$, $\texttt{diabetic}_i$ and $\texttt{hypertentive}_i$ are (binary) indicator variables for smoking, diabetes and high blood pressure, respectively
+* $\texttt{smoker}_i \times \texttt{hypertentive}_i$ and $\texttt{diabetic}_i \times \texttt{hypertentive}_i$ denote the interaction terms
+
+```{r}
+# Adding interaction terms to the logistic regression model
+int_model <- glm(
+  y_train ~ . + smokerSmoker:high_bpHypertension + diabeticDiabetic:high_bpHypertension,
+  data = train_df,
+  family = binomial(link = "logit")
+)
+
+summary(int_model)
+```
+
+Note that $\texttt{cpk}$ and $\texttt{smokerSmoker:high\_bpHypertension}$ are teetering on the edge of statistical significance. Compared to the previous model, the difference in results is marginal.
+
+An analysis of deviance (ANOVA) test is employed to compare the two nested models. The $\texttt{full\_model}$ is nested within $\texttt{int\_model}$, as the latter includes all predictors from the former along with the additional interaction terms.
+
+Let $\mathcal{M}_1$ denote the simpler main-effects model and $\mathcal{M}_2$ denote the extended interaction model. The inclusion of both interaction terms is assessed by comparing the log-likelihoods of both models:
+\begin{align*}
+  \mathcal{D} = -2\left(\ell_{\mathcal{M}_1} - \ell_{\mathcal{M}_2}\right),
+\end{align*}
+where $\ell_{\mathcal{M}_1}$ and $\ell_{\mathcal{M}_2}$ are the maximised log-likelihoods of $\texttt{full\_model}$ and $\texttt{int\_model}$, respectively.
+
+The test evaluates whether the additional interaction effects significantly improve model fit:
+\begin{gather*}
+  H_0: \beta_{12} = \beta_{13} = 0 \\
+  H_1: \exists \ j \in \{12, 13\} \implies \beta_j \neq 0
+\end{gather*}
+Under the null hypothesis, the statistic $\mathcal{D}$ approximately follows a $\chi^2_k$ distribution, with $k$ equal to the difference in model degrees-of-freedom.
+
+```{r}
+# Analysis of deviance test
+anova(full_model, int_model, test = "Chisq")
+```
+
+Given a p-value of $p = 0.1408$, there is insufficient evidence to reject $H_0$. From this, we infer that there is no statistically significant evidence that including the interaction terms improves the model's explanatory power.
+
+Bidirectional stepwise selection seeks the model that minimises the Akaike Information Criterion (AIC), defined as
+\begin{align*}
+  \text{AIC}(\mathcal{M}) := -2\ell(\hat{\beta}) + 2k,
+\end{align*}
+where $\ell({\hat{\beta}})$ is the maximised log-likelihood of model $\mathcal{M}$ and $k$ is the number of estimated parameters.
+
+The algorithm iteratively evaluates the inclusion or exclusion of predictors based on their contribution to the AIC:
+
+* Forward selection: includes variables that most reduce the AIC
+* Backward selection: excludes variables whose exclusion most reduces the AIC
+
+At every iteration, both directions are considered; the process continues until no further addition or removal of predictors yields a lower AIC value.
+
+```{r}
+# Bidirectional stepwise model selection
+step_full <- stepAIC(full_model, direction = "both", trace = FALSE)
+
+summary(step_full)
+```
+
+The final selected model includes age, ejection fraction, serum creatinine and CPK levels. On the basis of AIC alone, we would favour this model over the standard logistic regression model. Bar CPK levels, these were also the predictors identified as significant in the initial model.
+
+Again, we perform an analysis of deviance test to compare $\texttt{full\_model}$ with $\texttt{step\_model}$.
+
+```{r}
+# Analysis of deviance test
+anova(step_full, full_model, test = "Chisq")
+```
+
+With $p = 0.7383$, we, again, favour the initial model.
+
+We now bring regularisation (or penalisation – both words are used interchangeably here) into the mix. *Elastic net* is a form of regularised regression that combines:
+
+* $L_1$ penalty (LASSO): encourages sparsity by shrinking coefficients *to* zero (effectively performing feature selection)
+* $L_2$ penalty (ridge): shrinks coefficients smoothly *towards* zero
+
+The elastic net loss function is given in the following form:
+\begin{align*}
+  \text{Loss}(\alpha, \lambda) = \sum_{i=1}^n(y_i - \hat{y}_i) + \lambda\left(\alpha\sum_{j=1}^p |\beta_j| + (1 - \alpha)\sum_{j=1}^p\beta_j^2\right),
+\end{align*}
+where
+
+* $n$ is the number of observations and $p$ is the number of predictors
+* $\lambda$ controls the overall strength of the penalisation
+* $\alpha \in [0, 1]$ determines the mix between $L_1$ and $L_2$ penalisation, e.g. when $\alpha = 1$, the problem collapses into simple ridge regression
+
+Below, we run a nested search over candidate values of $\alpha$ in order to find the corresponding optimal value of $\lambda$, resulting in a tuned combination of hyperparameters that maximises the cross-validated Area Under Curve (AUC) value.
+
+In cross-validation, we split the data into $K$ folds. For each fold $1, \dots, K$:
+
+1. Train the model on the remaining $K-1$ folds
+2. Predict on the held-out fold
+3. Compute the AUC
+
+Then, we average over all folds:
+\begin{align*}
+  \text{CV-AUC}(\alpha, \lambda) = \frac{1}{K}\sum_{k=1}^K\text{AUC}_k(\alpha, \lambda).
+\end{align*}
+Finally, we select the hyperparameters that generalise best to unseen data:
+\begin{align*}
+  (\alpha^*, \lambda^*) = \arg\max\text{CV-AUC}(\alpha, \lambda).
+\end{align*}
+
+```{r}
+# Converting regressor to binary for glmnet
+y_train_bin <- ifelse(y_train == "Died", 1, 0)
+y_test_bin  <- ifelse(y_test == "Died", 1, 0)
+```
+
+```{r}
+# Elastic net cross-validation using AUC as the metric
+alphas <- seq(0, 1, by = 0.1)
+cv_results <- data.frame(alpha = numeric(), lambda = numeric(), auc = numeric())
+
+set.seed(123)
+
+for (a in alphas) {
+  # 10-fold CV
+  cv_fit <- cv.glmnet(as.matrix(X_train), y_train_bin, family = "binomial",
+                      alpha = a, type.measure = "auc", nfolds = 10)
+  
+  # Identifying best lambda (highest mean AUC)
+  opt_idx <- which.max(cv_fit$cvm)
+  
+  # Storing alpha, lambda and best AUC score
+  cv_results <- rbind(cv_results, data.frame(
+    alpha = a,
+    lambda = cv_fit$lambda[opt_idx],
+    auc = max(cv_fit$cvm)
+  ))
+  
+  # Printing progress
+  cat(sprintf("Alpha = %.1f | Optimal lambda = %.5f | CV AUC = %.5f\n",
+              a, cv_fit$lambda[opt_idx], max(cv_fit$cvm)))
+}
+
+# Finding overall best alpha–lambda combination (highest AUC)
+opt_pars <- cv_results[which.max(cv_results$auc), ]
+
+print(opt_pars)
+```
+
+```{r}
+# Fitting final elastic net model using optimal alpha and lambda
+elnet_model <- glmnet(as.matrix(X_train), y_train_bin, alpha = opt_pars$alpha,
+                      lambda = opt_pars$lambda, family = "binomial")
+```
+
+Note that, as $\lambda << 1$, the penalty term contributes very little to the model. Nevertheless, after fitting the elastic net model, we trace out the Receiving Operating Characteristic (ROC) curve and calculate the corresponding AUC.
+
+The predicted probabilities are compared against the true binary outcomes, $y_i \in \{0, 1\}$, across a range of classification thresholds, $t \in [0, 1]$. For each threshold $t$,
+\begin{align*}
+  y_i = \begin{cases}
+    1 \quad \text{if } \hat{p}_i \geq t \\
+    0 \quad \text{if } \hat{p}_i < t,
+    \end{cases}
+\end{align*}
+where $\hat{p}_i \in (0, 1)$ is the predicted probability of the 'positive' outcome (in this case, morbidly, death). The true positive (TP) and false positive (FP) rates (TPR and FPR, respectively), based on a chosen threshold, are calculated as follows:
+\begin{gather*}
+  \text{TPR}(t) = \frac{\text{TP}(t)}{\text{TP}(t) + \text{FN}(t)} \\
+  \text{FPR}(t) = \frac{\text{FP}(t)}{\text{FP}(t) + \text{TN}(t)},
+\end{gather*}
+where
+
+* FN/TN denotes false/true negatives
+
+An ROC curve is plotted by adjusting the value of $t$:
+\begin{align*}
+  \text{ROC} = \{(\text{FPR}(t), \text{TPR}(t) : t \in [0, 1]\}
+\end{align*}
+
+The area under the curve is usually calculated as an integral via the trapezoidal rule \cite{roc1}:
+\begin{align*}
+  A = \int_{x=0}^{x=1} \text{TPR}(\text{FPR}^{-1}(x)) \ \text{d}x,
+\end{align*}
+where
+
+* $\text{TPR}(t) : t \rightarrow y(x)$ (the $y$-axis is the true positive rate)
+* $\text{FPR}(t) : t \rightarrow x$ (the $x$-axis is the false positive rate)
+
+It is equivalent to the probability that, given one positive (death) and one negative (survival) instance, the classifier is able to discern between the two outcomes. An AUC value of $1$ represents perfect discrimination; a value of 0.5 means that the classifier is no better than random guessing \cite{roc2, roc3}.
+
+```{r, message = FALSE}
+# Predicted probabilities
+pred_full  <- predict(full_model, newdata = data.frame(X_test), type = "response")
+pred_elnet <- predict(elnet_model, newx = as.matrix(X_test), type = "response")
+```
+
+```{r, message = FALSE}
+# Finding ROC curves for both models
+roc_full  <- roc(y_test_bin, pred_full)
+roc_elnet <- roc(y_test_bin, as.vector(pred_elnet))
+```
+
+```{r, message = FALSE}
+# Computing AUC values for both models
+auc_full  <- auc(roc_full)
+auc_elnet <- auc(roc_elnet)
+```
+
+```{r}
+auc_full; auc_elnet
+```
+This means that both models can correctly identify a (randomly chosen) death or survival around 72% of the time.
+
+We continue with an arbitrary threshold value of $t = 0.5$. A confusion matrix for both models is then formed. A table is displayed below, detailing the four entries of a confusion matrix.
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{c|c|c}
+\textbf{Actual \textbackslash\ Predicted} & \textbf{1} & \textbf{0} \\ \hline
+\textbf{1} & True Positive (TP) & False Negative (FN) \\ \hline
+\textbf{0} & False Positive (FP) & True Negative (TN) \\
+\end{tabular}
+\caption{Confusion matrix layout for binary classification.}
+\label{tab:confusion-matrix}
+\end{table}
+From this, the following metrics are deduced:
+
+* $\text{Accuracy} = \frac{\text{TP} + \text{TN}}{\text{TP} + \text{TN} + \text{FP} + \text{FN}}$
+* $\text{Sensitivity (Recall)} = \frac{\text{TP}}{\text{TP} + \text{FN}}$
+* $\text{Specificity} = \frac{\text{TN}}{\text{TN} + \text{FP}}$
+* $\text{Precision} = \frac{\text{TP}}{\text{TP} + \text{FP}}$
+* $F_1 = 2 \cdot \frac{\text{Precision} \cdot \text{Recall}}{\text{Precision} + \text{Recall}}$
+
+```{r}
+# Threshold at 0.5
+class_full <- ifelse(pred_full  > 0.5, 1, 0)
+class_elnet <- ifelse(pred_elnet > 0.5, 1, 0)
+
+cm_full <- confusionMatrix(factor(class_full), factor(y_test_bin),
+                            positive = "1")
+cm_elnet <- confusionMatrix(factor(class_elnet), factor(y_test_bin),
+                            positive = "1")
+```
+
+```{r}
+cm_full
+```
+
+```{r}
+cm_elnet
+```
+
+A Cohen's kappa value of $0.3426$ for the logistic regression model indicates merely a slight agreement above chance; a value of $0.1303$ means that the discriminatory power of the penalised model is even worse. This means that both models are only slightly better at performing compared to random guessing \cite{kappa}.
+
+
+```{r}
+results <- data.frame(
+  Model = c("Logistic", "Elastic Net"),
+  AUC = c(auc_full, auc_elnet),
+  Accuracy = c(cm_full$overall["Accuracy"],
+               cm_elnet$overall["Accuracy"]),
+  Sensitivity = c(cm_full$byClass["Sensitivity"],
+                  cm_elnet$byClass["Sensitivity"]),
+  Specificity = c(cm_full$byClass["Specificity"],
+                  cm_elnet$byClass["Specificity"]),
+  F1 = c(F1_Score(class_full, y_test_bin),
+         F1_Score(class_elnet, y_test_bin))
+)
+
+print(results)
+```
+
+Ultimately, the logistic regression model seems to outperform the elastic net model on virtually all fronts (excluding specificity).
+
+We decide to address the imbalance in the proportion of death outcomes by, firstly, introducing weights. For $y_i \in \{0, 1\}$, let:
+
+* $n_1 = \sum_i \mathbf{1}(y_i = 1)$ be the number of 'positive' outcomes (death)
+* $n_0 = \sum_i \mathbf{1}(y_i = 0)$ be the number of 'negative' outcomes (survival)
+
+For each observation, a weight, $w_i$, is sampled:
+\begin{align*}
+  w_i = \begin{cases}
+    \frac{n_0}{n_1} \quad \text{if } y_i = 1 \\
+    1 \quad \text{if } y_i = 0,
+    \end{cases}
+\end{align*}
+As a result, the weighted sum of positive cases is equal to the number of negative cases and the data set, effectively, becomes balanced in total weight:
+\begin{align*}
+  \sum_{i:y_i=1} w_i = n_1 \cdot \frac{n_0}{n_1} = n_0
+\end{align*}
+
+Such weights are then factored into our two regression models.
+
+```{r, warning = FALSE}
+# Weighting positives (deaths) proportionally to imbalance
+wts <- ifelse(y_train_bin == 1,
+              sum(y_train_bin==0)/sum(y_train_bin==1), 1)
+
+# Weighted logistic regression
+w_full <- glm(y_train ~ ., data = train_df, family = binomial(link = "logit"),
+               weights = wts)
+
+# Weighted elastic net
+w_elnet <- glmnet(as.matrix(X_train), y_train_bin,
+                  family="binomial", alpha = opt_pars$alpha,
+                  lambda = opt_pars$lambda, weights = wts)
+```
+
+```{r, message = FALSE}
+# Predicted probabilities
+pred_w_full  <- predict(w_full, newdata = data.frame(X_test), type = "response")
+pred_w_elnet <- predict(w_elnet, newx = as.matrix(X_test), type = "response")
+
+# Calculating ROC curves for all models
+roc_w_full  <- roc(y_test_bin, pred_w_full)
+roc_w_elnet <- roc(y_test_bin, as.vector(pred_w_elnet))
+
+# Computing AUC values for all models
+auc_w_full  <- auc(roc_w_full)
+auc_w_elnet <- auc(roc_w_elnet)
+```
+
+```{r}
+auc_w_full; auc_w_elnet
+```
+
+The AUC values of the weighted models closely match those of the preceding models.
+
+Matthews correlation coefficient (MCC) is utilised here to find an optimal threshold value. This criterion is considered to be "more informative" over other evaluation metrics (e.g. F1-score, accuracy) as it harmoniously accounts for all four confusion matrix categories \cite{mcc}. Again, we use it to address class imbalance. It is computed as follows:
+\begin{align*}
+  \text{MCC} = \frac{\text{TP} \cdot \text{TN} - \text{FP} \cdot \text{FN}}{\sqrt{(\text{TP} + \text{FP})(\text{TP} + \text{FN})(\text{TN} + \text{FP})(\text{TN} + \text{FN})}}
+\end{align*}
+
+```{r}
+# Defining helper function to calculate MCC
+mcc_for_thresh <- function(thresh, probs, actual) {
+  preds <- ifelse(probs >= thresh, 1, 0)
+  
+  # Confusion matrix elements
+  TP <- sum(actual == 1 & preds == 1)
+  TN <- sum(actual == 0 & preds == 0)
+  FP <- sum(actual == 0 & preds == 1)
+  FN <- sum(actual == 1 & preds == 0)
+
+  # Denominator term
+  denom <- (TP+FP)*(TP+FN)*(TN+FP)*(TN+FN)
+
+  # Dealing with division by zero
+  eps <- 1e-9
+  mcc <- (TP*TN-FP*FN) / sqrt((TP+FP+eps)*(TP+FN+eps)*(TN+FP+eps)*(TN+FN+eps))
+}
+```
+
+```{r}
+# Searching thresholds for logistic regression model
+thresholds <- seq(0.1, 0.9, by = 0.01)
+
+mcc_vals_full <- sapply(thresholds, mcc_for_thresh, probs = pred_w_full,
+                         actual = y_test_bin)
+opt_thresh_full <- thresholds[which.max(mcc_vals_full)]
+opt_mcc_full <- max(mcc_vals_full)
+
+cat(sprintf("Optimal threshold (logistic regression) = %.3f | MCC = %.3f\n",
+            opt_thresh_full, opt_mcc_full))
+```
+
+```{r}
+# Searching thresholds for elastic net model
+mcc_vals_elnet <- sapply(thresholds, mcc_for_thresh, probs = pred_w_elnet,
+                         actual = y_test_bin)
+opt_thresh_elnet <- thresholds[which.max(mcc_vals_elnet)]
+opt_mcc_elnet <- max(mcc_vals_elnet)
+
+cat(sprintf("Optimal threshold (elastic net) = %.3f | MCC = %.3f\n", 
+            opt_thresh_elnet, opt_mcc_elnet))
+```
+
+```{r}
+# Threshold at deduced optimum
+class_w_full  <- ifelse(pred_full > opt_thresh_full, 1, 0)
+class_w_elnet <- ifelse(pred_elnet > opt_thresh_elnet, 1, 0)
+
+cm_w_full <- confusionMatrix(factor(class_w_full), factor(y_test_bin), positive = "1")
+cm_w_elnet <- confusionMatrix(factor(class_w_elnet), factor(y_test_bin), positive = "1")
+
+w_results <- data.frame(
+  Model = c("Weighted Logistic", "Weighted Elastic Net"),
+  AUC = c(auc_w_full, auc_w_elnet),
+  Accuracy = c(cm_w_full$overall["Accuracy"], cm_w_elnet$overall["Accuracy"]),
+  Sensitivity = c(cm_w_full$byClass["Sensitivity"], cm_w_elnet$byClass["Sensitivity"]),
+  Specificity = c(cm_w_full$byClass["Specificity"], cm_w_elnet$byClass["Specificity"]),
+  F1 = c(F1_Score(class_w_full, y_test_bin), F1_Score(class_w_elnet, y_test_bin))
+)
+
+print(w_results)
+```
+
+Apart from a decrease in sensitivity for the penalised model, there are no major differences in metric values compared to each model's predecessor. Due to a minute difference in AUC between both models, on the basis of interpretability, we choose the weighted logistic regression model as our model for evaluation and fit it using the entire data set.
+
+```{r}
+# Combining all preprocessed data 
+df_final <- data.frame(y = y, X)
+
+y_bin_final <- ifelse(df_final$y == "Died", 1, 0)
+
+# Standardising numeric predictors (mean = 0, sd = 1)
+df_final[cont_vars] <- scale(df_final[cont_vars])
+
+# Class weights to address imbalanced data
+wts_final <- ifelse(y_bin_final == 1,
+                    sum(y_bin_final == 0) / sum(y_bin_final == 1), 1)
+
+# Fitting final weighted logistic regression
+final_w_logit <- glm(y ~ ., data = df_final,
+                     family = binomial(link = "logit"), weights = wts_final)
+
+summary(final_w_logit)
+```
+Odds ratios and their 95% confidence intervals are calculated to help explain the estimated coefficients of the model (that are of significance); we use the standard deviation values to 'rescale' the given values into more meaningful, interpretable results.
+
+```{r, warning = FALSE, message = FALSE}
+# Computing (rounded) odds ratios and confidence intervals
+or_table <- exp(cbind(OR = coef(final_w_logit), confint(final_w_logit)))
+```
+
+```{r}
+# Rounding to 3 decimal places
+or_table <- round(or_table, 3)
+
+# Showing only significant variables
+sig_vars <- c("age", "ef", "serum_s", "serum_c", "cpk")
+or_table <- or_table[sig_vars, ]
+
+or_table
+```
+
+```{r}
+# Means and SDs
+num_stats <- data.frame(
+  Mean = sapply(df_clean[, sig_vars, drop = FALSE], mean, na.rm = TRUE),
+  SD   = sapply(df_clean[, sig_vars, drop = FALSE], sd, na.rm = TRUE)
+)
+
+round(num_stats, 3)
+```
+
+Holding all other covariates constant, according to the model,
+
+* A 10-year increase in age is associated with ~92% higher odds of death ($\text{OR} \approx 1.92$, $\sigma = 11.895 \approx 10$)
+* A 10% increase in ejection fraction reduces the odds of death by ~54% ($\text{OR} \approx 0.46$, $\sigma = 11.835 \approx 10$)
+* Each 5 mEq/L increase in serum sodium reduces the odds of death by ~24% ($\text{OR} \approx 0.76$, $\sigma = 4.412	\approx 5$)
+* Each 1 mg/dL increase in serum creatinine more than doubles the odds of death ($\text{OR} \approx 2$, $\sigma = 1.035 \approx 1$)
+* For every 1000 $\mu$g/L increase in creatine phosphokinase, the odds of death increase by ~32% ($\text{OR} \approx 1.32$, $\sigma = 970.228 \approx 1000$)
+
+# Part D: Model evaluation
+
+To assess the performance and adequacy of our weighted logistic regression model, we carry out a series of diagnostic and validation tests, as outlined below.
+
+```{r, warning = FALSE}
+# Multicollinearity
+vif(final_w_logit)
+```
+
+```{r, warning = FALSE, results = "hide", fig.keep = "none"}
+# Linearity assumption
+fit <- glm(y_bin_final ~ age + ef + serum_s + serum_c + cpk,
+           family = binomial(link = "logit"), data = df_final)
+```
+
+```{r, warning = FALSE, results = "hide", fig.keep = "none"}
+crPlots(fit)
+```
+
+As seen in [Appendix D1](#appendix_D1), the above outputs five component-plus-residual (CR) plots for each significant (continuous) predictor of the weighted logistic regression model.
+
+```{r, warning = FALSE}
+# Hosmer–Lemeshow goodness-of-fit test
+hoslem.test(y_bin_final, fitted(final_w_logit))
+```
+
+```{r}
+# Computing deviance residuals and fitted probabilities
+resid_dev <- residuals(final_w_logit, type = "deviance")
+fitted_vals <- fitted(final_w_logit)
+```
+
+```{r, results = "hide", fig.keep = "none"}
+# Binned residual plot
+binnedplot(
+  x = fitted_vals,
+  y = resid_dev,
+  xlab = "Predicted probability",
+  ylab = "Average deviance residuals",
+  main = "Binned residual plot: (Weighted) logistic regression"
+)
+```
+
+[Appendix D2](#appendix_D2) includes the binned residual plot of the (weighted) logistic regression model.
+
+```{r, results='hide', message = FALSE}
+# ROC and AUC
+roc_final <- roc(y_bin_final, fitted(final_w_logit))
+auc(roc_final)
+```
+
+```{r, results = "hide", fig.keep = "none"}
+# ROC plot
+plot(roc_final, col = "blue", lwd = 2,
+     main = "ROC curve: (Weighted) logistic regression model")
+```
+
+The figure in [Appendix D3](#appendix_D3) includes the binned residual plot of the (weighted) logistic regression model.
+
+```{r, results = "hide", fig.keep = "none"}
+# Calibration data frame for (weighted) logistic regression model
+cal_logit_df <- data.frame(
+  Predicted = fitted(final_w_logit),
+  Actual = y_bin_final
+)
+
+# Calibration plot with CIs
+ggplot(cal_logit_df, aes(x = Predicted, y = Actual)) +
+  geom_point(alpha = 0.3, size = 1.2) +
+  geom_smooth(
+    method = "loess", 
+    se = TRUE,
+    color = "red",
+    fill = "pink",
+    span = 0.8
+  ) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey40") +
+  labs(
+    title = "Calibration plot: (Weighted) logistic regression model",
+    x = "Estimated Probability",
+    y = "Observed Outcome"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+See [Appendix D4](#appendix_D4) for the calibration plot of the (weighted) logistic regression model.
+
+```{r, warning = FALSE, message = FALSE}
+# Bootstrapping AUC 1000 times
+set.seed(123)
+
+auc_boot <- replicate(1000, {
+  idx <- sample(seq_len(nrow(df_final)), replace = TRUE)
+  mod <- glm(y ~ ., data = df_final[idx, ], family = binomial(link = "logit"),
+             weights = wts_final[idx])
+  pred <- predict(mod, newdata = df_final[-idx, ], type = "response")
+  roc_obj <- roc(y_bin_final[-idx], pred)
+  
+  auc(roc_obj)
+})
+```
+
+```{r}
+mean(auc_boot) # average bootstrap AUC
+```
+
+```{r}
+sd(auc_boot) # standard deviation
+```
+
+```{r}
+quantile(auc_boot, c(0.025, 0.975)) # 95% CIs
+```
+
+To accommodate for any non-linear effects, we fit natural cubic spline terms to the significant (continuous) predictors.
+
+```{r, warning = FALSE}
+# Fitting natural cubic spline model on full data
+library(splines)
+
+final_w_logit_spline <- glm(
+  y_bin_final ~ ns(age, 3) + ns(ef, 3) + ns(serum_s, 3) + ns(serum_c, 3) +
+    ns(cpk, 3) + platelet + sexMale + smokerSmoker + diabeticDiabetic +
+    high_bpHypertension + anaemicAnaemic,
+  data = df_final,
+  family = binomial(link = "logit"),
+  weights = wts_final
+)
+```
+
+```{r, warning = FALSE, results = "hide", fig.keep = "none"}
+# Function to plot splines
+plot_spline <- function(model, var) {
+  pred_obj <- ggpredict(model, terms = var)
+  plot(pred_obj) +
+    geom_line(color = "blue", linewidth = 0.9) +
+    geom_ribbon(aes(ymin = conf.low, ymax = conf.high),
+                alpha = 0.25, fill = "lightblue") +
+    labs(
+      title = paste("Effect of", var),
+      x = var,
+      y = "Predicted Probability"
+    ) +
+    theme_minimal(base_size = 10) +
+    theme(
+      plot.title   = element_text(hjust = 0.5, face = "bold", size = 11),
+      axis.title.x = element_text(size = 9),
+      axis.title.y = element_text(size = 9),
+      axis.text.x  = element_text(size = 8),
+      axis.text.y  = element_text(size = 8)
+    )
+}
+
+# Example: plot_spline(final_w_logit_spline, "age")
+```
+
+[Appendix D5](#appendix_D5) includes a figure that displays five cubic splines, corresponding to each significant (continuous) covariate.
+
+```{r, warning = FALSE}
+summary(final_w_logit_spline)
+```
+
+```{r, message = FALSE, warning = FALSE}
+AIC(final_w_logit, final_w_logit_spline)
+```
+
+```{r, message = FALSE, warning = FALSE}
+roc_spline <- roc(y_bin_final, fitted(final_w_logit_spline))
+auc(roc_spline)
+```
+
+```{r, results = "hide", fig.keep = "none", message = FALSE}
+cal_spline_df <- data.frame(predicted = fitted(final_w_logit_spline),
+                            observed = y_bin_final)
+
+# Calibration plot with CIs
+ggplot(cal_spline_df, aes(x = predicted, y = observed)) +
+  geom_point(alpha = 0.3, size = 1.2) +
+  geom_smooth(
+    method = "loess", 
+    se = TRUE,
+    color = "red",
+    fill = "pink",
+    span = 0.8
+  ) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey40") +
+  labs(
+    title = "Calibration plot: (Weighted) cubic spline model",
+    x = "Estimated Probability",
+    y = "Observed Outcome"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+See [Appendix D6](#appendix_D6) for the calibration plot of the natural cubic spline model.
+
+# Part E: Results and discussion
+
+The weighted logistic regression model was first evaluated on the test set using probability predictions at a range of classification thresholds. ROC analysis yielded an AUC of 0.7276, indicating moderate discrimination, i.e., the model correctly ranked a randomly chosen death above a randomly chosen survivor approximately 73% of the time. To account for class imbalance in the outcome, MCC values were computed across thresholds ranging from 0.10 to 0.80. The optimal threshold under MCC was 0.55, achieving an MCC of 0.396
+
+Next, the elastic net model was tuned via 10-fold cross-validation in order to minimise binomial deviance. Similar results were produced. Its test-set AUC was 0.7171, only slightly lower than the weighted logistic regression. MCC optimisation, again, identified 0.55 as the best threshold. Initially, the MCC computation returned an undefined value (NaN) due to a zero term in the denominator, a known numerical issue in small or imbalanced samples; introducing a small stabilising constant $\epsilon > 0$ mitigated this issue and yielded a valid MCC of 0.443. Despite the slightly higher MCC, the elastic net model did not demonstrate consistently superior performance, nor did it improve calibration or discrimination in a way that would justify preferring it over the weighted logistic regression model. This suggests that the benefits of regularisation were limited in this dataset.
+
+A series of diagnostic tools was then used to assess whether the assumptions of the (linear) logistic regression model were satisfied.
+
+Variance inflation factors (VIFs) for all predictors were below 5, indicating no problematic multicollinearity. However, the component-plus-residual (CR) plots revealed substantial deviations from linearity for several predictors — particularly serum creatinine, which showed a distinctly curved relationship with the log-odds of death.
+
+The Hosmer–Lemeshow goodness-of-fit test yielded a strongly significant p-value ($p = 1.4 \times 10^{-5}$), providing evidence of poor calibration. Binned residual plots further demonstrated that the model underestimated mortality risk across the board, with predominantly negative residuals. Collectively, these diagnostics indicated that the assumption of linearity-in-the-logit was violated and that a more flexible approach was required.
+
+To further assess the stability of the weighted logistic regression model, we performed a non-parametric bootstrap of the AUC with 1,000 resamples. In each iteration, we drew a bootstrap sample with replacement and evaluated its discrimination on the corresponding out-of-bag data. The average bootstrap AUC was 0.753, closely aligning with the original test-set AUC, indicating that the model’s discrimination is not overly sensitive to the particular sample split. The bootstrap distribution exhibited a standard deviation of 0.043, and the 95% confidence interval (0.662–0.834) suggested moderate variability. This is unsurprising, given the relatively small sample size and class imbalance.
+
+Given the clear non-linear patterns, a natural cubic spline logistic regression model was fitted for the five continuous predictors: age, EF, serum sodium, serum creatinine, and CPK (each with 3 degrees of freedom). Partial effect plots (generated with the $\texttt{ggeffects}$ package) confirmed the diagnostics:
+
+* Age: A shallow slope at younger ages that steepened as age increased.
+* Ejection fraction: A sharp decline in risk from very low EF values that flattened thereafter.
+* Serum sodium: Near-linear behaviour with only minimal deviation.
+* Serum creatinine: Strong non-linearity with an initial steep rise in mortality probability that plateaued at higher values.
+* CPK: Mild non-linearity, mainly concentrated at low values.
+
+Model fit improved with the addition of splines; calibration plots showed slightly better agreement between observed and predicted probabilities, with the LOESS curve tracking the 45° line more closely and with slightly narrower confidence bands. Spline terms for age, EF and serum creatinine were statistically significant ($p < 0.01$), supporting their inclusion. Although no single spline model was selected as “best”, the improvements in calibration and fit demonstrate the added flexibility gained by relaxing prior linearity assumptions.
+
+\bibliographystyle{unsrtnat}
+\bibliography{references}
+
+# Appendix
+
+## Appendix B1: Histograms of continuous variables {#appendix_B1}
+
+```{r fig.histograms, echo=FALSE, fig.cap="Histograms of continuous variables with density overlays showing the distribution shapes.", fig.width=9, fig.height=9, out.width="100%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("histograms.png")
+```
+
+## Appendix B2: Boxplots of continuous variables {#appendix_B2}
+
+```{r fig.boxplots, echo=FALSE, fig.cap="Boxplots of categorical variables based on death outcome.", fig.width=9, fig.height=9, out.width="75%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("boxplots.png")
+```
+
+## Appendix B3: Barplots of categorical variables {#appendix_B3}
+
+```{r fig.barplots, echo=FALSE, fig.cap="Barplots of categorical variables based on death outcome.", fig.width=9, fig.height=9, out.width="100%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("barplots.png")
+```
+
+## Appendix D1: Residual plots of continuous predictors {#appendix_D1}
+
+```{r fig.component_residual, echo=FALSE, fig.cap="Component-plus-residual (CR) plots of each significant continuous predictor, based on the weighted logistic regression model.", fig.width=9, fig.height=9, out.width="90%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("component_residual.png")
+```
+
+## Appendix D2: Binned residual plot of weighted logistic regression model {#appendix_D2}
+
+```{r fig.binned, echo=FALSE, fig.cap="Binned deviance residual plot of the weighted logistic regression model.", fig.width=9, fig.height=9, out.width="90%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("binned.png")
+```
+
+## Appendix D3: ROC plot of weighted logistic regression model {#appendix_D3}
+
+```{r fig.roc, echo=FALSE, fig.cap="Receiving Operator Characteristic (ROC) curve of the weighted logistic regression model.", fig.width=9, fig.height=9, out.width="90%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("roc.png")
+```
+
+## Appendix D4: Calibration plot of weighted logistic regression model {#appendix_D4}
+
+```{r fig.calibration, echo=FALSE, fig.cap="Calibration plot of the weighted logistic regression model with 95% confidence intervals.", fig.width=9, fig.height=9, out.width="90%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("calibration.png")
+```
+
+## Appendix D5: Natural cubic spline plots of continuous predictors {#appendix_D5}
+
+```{r fig.splines, echo=FALSE, fig.cap="Natural cubic spline plots of each significant continuous predictor (based on the weighted logistic regression model), with 95% confidence intervals", fig.width=9, fig.height=9, out.width="90%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("splines.png")
+```
+
+## Appendix D6: Calibration plot of weighted cubic spline model {#appendix_D6}
+
+```{r fig.calibration_spline, echo=FALSE, fig.cap="Calibration plot of the weighted natural cubic spline model, with 95% confidence intervals.", fig.width=9, fig.height=9, out.width="90%", fig.pos="H", fig.align='center'}
+knitr::include_graphics("calibration_spline.png")
+```
