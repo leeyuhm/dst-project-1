@@ -1,4 +1,4 @@
-# Heart Failure Mortality Prediction
+# Heart failure mortality prediction
 
 A piece of coursework from the University of Bristol module *Data Science Toolbox*.
 
