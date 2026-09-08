@@ -4,7 +4,7 @@ A piece of coursework from the University of Bristol module *Data Science Toolbo
 
 ## Overview
 
-An academic data science project investigating mortality prediction in patients with heart failure using statistical classification methods in R. The project develops and evaluates models for predicting mortality from clinical patient characteristics. The analysis focuses not only on predictive performance, but also on class imbalance, model calibration, interpretability and validation.
+An academic data science project investigating mortality prediction in patients with heart failure using statistical classification methods in R. The project develops and evaluates models for predicting mortality from clinical patient characteristics. The analysis focuses on predictive performance as well as class imbalance, model calibration, interpretability and validation.
 
 ## Methods
 
