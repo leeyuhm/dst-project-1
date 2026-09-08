@@ -1,6 +1,6 @@
 # Heart Failure Mortality Prediction
 
-A piece of coursework from the University of Bristol module **Data Science Toolbox**.
+A piece of coursework from the University of Bristol module *Data Science Toolbox*.
 
 ## Overview
 
