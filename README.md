@@ -1,6 +1,6 @@
 # Heart failure mortality prediction
 
-A piece of coursework from the University of Bristol module *Data Science Toolbox*. This body of work was awarded a first-class mark (83).
+A piece of coursework from the University of Bristol module *Data Science Toolbox*. This body of work was awarded a first-class mark (73).
 
 ## Overview
 
